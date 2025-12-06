@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D University Schedule Planner</title>
+    <!-- Load Tailwind CSS for styling the surrounding HTML -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Three.js and OrbitControls for 3D rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            overflow: hidden; /* Hide scrollbars, as the canvas fills the viewport */
+        }
+        #app-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background-color: #f0f4f8; /* Soft background */
+        }
+        #scene-container {
+            flex-grow: 1;
+            position: relative;
+        }
+        canvas {
+            display: block;
+        }
+        /* Style for the day/time labels on the 3D grid */
+        .grid-label {
+            position: absolute;
+            color: #334155;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-align: center;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.7);
+        }
+        #info-box {
+            transition: all 0.3s ease-in-out;
+            transform: translateY(10px);
+            opacity: 0;
+        }
+        #info-box.active {
+            transform: translateY(0);
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container" class="w-full h-screen">
+
+        <!-- Header -->
+        <header class="p-4 bg-white shadow-lg z-10">
+            <h1 class="text-3xl font-extrabold text-center text-indigo-600">
+                <span class="text-pink-500">3D</span> Course Schedule Visualizer
+            </h1>
+            <p class="text-center text-sm text-gray-500 mt-1">
+                Drag the scene to rotate and hover over the colored blocks for details.
+            </p>
+        </header>
+
+        <!-- Main Content: 3D Scene Container -->
+        <div id="scene-container" class="relative">
+            <canvas id="schedule-canvas"></canvas>
+
+            <!-- Info Box (Hidden by default, appears on hover) -->
+            <div id="info-box" class="absolute top-4 right-4 bg-white p-4 w-64 rounded-xl shadow-2xl border-t-4 border-indigo-500 z-20">
+                <h3 id="class-title" class="text-xl font-bold text-gray-800 mb-1">Schedule Block</h3>
+                <p id="class-code" class="text-sm font-mono text-indigo-600 mb-2"></p>
+                <div class="space-y-1 text-sm text-gray-600">
+                    <p><strong>Day:</strong> <span id="class-day"></span></p>
+                    <p><strong>Time:</strong> <span id="class-time"></span></p>
+                    <p><strong>Room:</strong> <span id="class-room" class="font-semibold"></span></p>
+                    <p><strong>Lecturer:</strong> <span id="class-lecturer"></span></p>
+                </div>
+            </div>
+
+            <!-- Labels for Days and Times -->
+            <div id="labels-container">
+                <!-- Labels will be dynamically added here by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. CONFIGURATION AND DATA ---
+
+        const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+        const TIMES = [
+            "8:30 - 9:30", "9:40 - 10:40", "10:50 - 11:50", "11:50 - 12:40 (Break)",
+            "12:40 - 1:40", "1:50 - 2:50", "3:00 - 4:00"
+        ];
+        const CELL_SIZE = 4;
+        const GRID_WIDTH = TIMES.length;
+        const GRID_HEIGHT = DAYS.length;
+        const INFO_BOX = document.getElementById('info-box');
+        const LABELS_CONTAINER = document.getElementById('labels-container');
+
+        // Color palette for a "cute" aesthetic
+        const COLOR_MAP = {
+            "CST-7110": 0xFFB3BA, // Light Pink (Distributed Systems)
+            "CST-7208": 0xFFE0B3, // Light Orange (Applied Cryptography)
+            "CST-7412": 0xB3FFC7, // Mint Green (Network Management)
+            "CST-7505": 0xB3E5FF, // Light Blue (Technical Writing)
+            "CST-7411": 0xF0B3FF, // Light Purple (Network Operating Systems)
+            "CST-7413": 0xFFFFB3, // Light Yellow (Ethical Hacking)
+            "CT-7411": 0xFFB3B3, // Light Coral (Placeholder for CT-7411)
+            "CT-7505": 0xB3FFD8, // Light Teal (Placeholder for CT-7505)
+            "CT-7413": 0xD3B3FF, // Lavender (Placeholder for CT-7413)
+            "CT-7208": 0xFFB3E0, // Rose (Placeholder for CT-7208)
+            "background": 0xE0E0E0 // Grey/Off-white for the grid
+        };
+
+        const SUBJECT_INFO = {
+            "CST-7110": { name: "Distributed Systems", lecturer: "Daw Ei Ei Moe" },
+            "CST-7208": { name: "Applied Cryptography", lecturer: "Dr. Win Lei Lei Aung" },
+            "CST-7412": { name: "Network Mgmt and Monitoring", lecturer: "Dr. Ei Thin Su" },
+            "CST-7505": { name: "Technical Writing", lecturer: "Daw May Nain Win" },
+            "CST-7411": { name: "Network Operating Systems", lecturer: "Dr. Hnin Htike Zaw" },
+            "CST-7413": { name: "Ethical Hacking & Pen Testing", lecturer: "Dr. Thiri Thitsar Khaing" },
+            "CT-7411": { name: "Computer Architecture", lecturer: "Assigned Lecturer" }, // Assuming CT- prefix subjects are related but not fully listed
+            "CT-7505": { name: "Software Engineering Principles", lecturer: "Assigned Lecturer" },
+            "CT-7413": { name: "Advanced Data Structures", lecturer: "Assigned Lecturer" },
+            "CT-7208": { name: "Operating Systems", lecturer: "Assigned Lecturer" }
+        };
+
+        // Parsed schedule data (simplified structure for 3D placement)
+        const SCHEDULE = [
+            // Monday
+            { day: 0, time: 0, code: "CT-7413", room: "353", type: "(L)" }, { day: 0, time: 1, code: "CST-7110", room: "423", type: "(L)" },
+            { day: 0, time: 2, code: "CT-7505", room: "431", type: "(TDA)" }, { day: 0, time: 3, code: "CT-7411", room: "324", type: "(L)" },
+            { day: 0, time: 4, code: "CST-7208", room: "322", type: "(L)" }, { day: 0, time: 5, code: "CST-7411", room: "324", type: "(L)" },
+            { day: 0, time: 6, code: "CT-7413", room: "323", type: "(L)" },
+            // Tuesday
+            { day: 1, time: 0, code: "CT-7413", room: "423", type: "(L)" }, { day: 1, time: 1, code: "CST-7412", room: "423", type: "(TDA)" },
+            { day: 1, time: 2, code: "CST-7505", room: "423", type: "(TDA)" }, { day: 1, time: 3, code: "CST-7411", room: "324", type: "(L)" },
+            { day: 1, time: 4, code: "CST-7208", room: "423", type: "(TDA)" }, { day: 1, time: 5, code: "CST-7411", room: "324", type: "(L)" },
+            { day: 1, time: 6, code: "CST-7413", room: "323", type: "(L)" },
+            // Wednesday
+            { day: 2, time: 0, code: "CST-7412", room: "421", type: "(TDA)" }, { day: 2, time: 1, code: "CST-7110", room: "421", type: "(L)" },
+            { day: 2, time: 2, code: "CT-7208", room: "423", type: "(TDA)" }, { day: 2, time: 3, code: "CT-7411", room: "323", type: "(L)" },
+            { day: 2, time: 4, code: "CST-7505", room: "323", type: "(L)" }, { day: 2, time: 5, code: "CST-7411", room: "322", type: "(L)" },
+            { day: 2, time: 6, code: "CST-7413", room: "323", type: "(L)" },
+            // Thursday
+            { day: 3, time: 0, code: "CT-7411", room: "422", type: "(L)" }, { day: 3, time: 1, code: "CST-7110", room: "421", type: "(TDA)" },
+            { day: 3, time: 2, code: "CT-7208", room: "423", type: "(TDA)" }, { day: 3, time: 3, code: "CST-7412", room: "323", type: "(L)" },
+            { day: 3, time: 4, code: "CST-7110", room: "323", type: "(L)" }, { day: 3, time: 5, code: "CST-7411", room: "324", type: "(L)" },
+            { day: 3, time: 6, code: "CST-7411", room: "324", type: "(TDA)" },
+            // Friday
+            { day: 4, time: 0, code: "CST-7411", room: "424", type: "(TDA)" }, { day: 4, time: 1, code: "CT-7412", room: "422", type: "(TDA)" },
+            { day: 4, time: 2, code: "CST-7412", room: "422", type: "(TDA)" }, { day: 4, time: 3, code: "CST-7413", room: "353", type: "(L)" },
+            { day: 4, time: 4, code: "CST-7505", room: "331", type: "(L)" }, { day: 4, time: 5, code: "CST-7411", room: "322", type: "(L)" },
+            { day: 4, time: 6, code: "CST-7412", room: "324", type: "(TDA)" }
+        ];
+
+        // --- 2. THREE.JS INITIALIZATION ---
+
+        const canvas = document.getElementById('schedule-canvas');
+        let scene, camera, renderer, controls, raycaster, mouse;
+        let objects = []; // Array to hold all interactive 3D blocks
+        let activeBlock = null;
+
+        function init() {
+            // Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f4f8); // Match HTML background
+
+            // Camera Setup (Perspective)
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(GRID_WIDTH * 1.5, GRID_HEIGHT * 1.5, GRID_WIDTH * 3); // Start position
+
+            // Renderer Setup
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight - document.querySelector('header').offsetHeight);
+            renderer.shadowMap.enabled = true; // Enable shadows for depth
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft shadow map
+
+            // Lighting (Soft and cute)
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // Soft overall light
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            directionalLight.position.set(GRID_WIDTH * 1.5, GRID_HEIGHT * 3, GRID_WIDTH * 2.5); // Top-down-ish
+            directionalLight.castShadow = true;
+
+            // Configure shadow properties
+            const d = GRID_WIDTH * 2;
+            directionalLight.shadow.camera.left = -d;
+            directionalLight.shadow.camera.right = d;
+            directionalLight.shadow.camera.top = d;
+            directionalLight.shadow.camera.bottom = -d;
+            directionalLight.shadow.camera.near = 0.1;
+            directionalLight.shadow.camera.far = 50;
+            directionalLight.shadow.bias = -0.0005; // Fix shadow banding
+            scene.add(directionalLight);
+
+            // Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; // Smooth movement
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 10;
+            controls.maxDistance = 50;
+            controls.maxPolarAngle = Math.PI / 2.1; // Prevent going under the floor
+
+            // Raycaster for interaction
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            // Build the 3D Schedule
+            createGridBase();
+            createClassBlocks();
+            createLabels();
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize, false);
+            renderer.domElement.addEventListener('mousemove', onMouseMove, false);
+        }
+
+        // --- 3. 3D OBJECT CREATION ---
+
+        function createGridBase() {
+            // Create a large, flat plane for the floor (schedule base)
+            const floorGeometry = new THREE.PlaneGeometry(
+                GRID_WIDTH * CELL_SIZE + CELL_SIZE * 0.5,
+                GRID_HEIGHT * CELL_SIZE + CELL_SIZE * 0.5
+            );
+            const floorMaterial = new THREE.MeshPhongMaterial({
+                color: COLOR_MAP.background,
+                side: THREE.DoubleSide
+            });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = Math.PI / 2; // Lay flat
+            floor.position.set(
+                (GRID_WIDTH * CELL_SIZE - CELL_SIZE) / 2 - CELL_SIZE/2,
+                0,
+                (GRID_HEIGHT * CELL_SIZE - CELL_SIZE) / 2 - CELL_SIZE/2
+            );
+            floor.receiveShadow = true; // It receives shadows
+            scene.add(floor);
+        }
+
+        function createClassBlocks() {
+            const blockGeometry = new THREE.BoxGeometry(CELL_SIZE - 0.4, 2.5, CELL_SIZE - 0.4);
+
+            SCHEDULE.forEach(item => {
+                const hexColor = COLOR_MAP[item.code] || 0xcccccc;
+                const material = new THREE.MeshPhongMaterial({
+                    color: hexColor,
+                    flatShading: true // Gives a simple, blocky look
+                });
+
+                const mesh = new THREE.Mesh(blockGeometry, material);
+
+                // Position calculation:
+                // X: based on time slot (0 to 6)
+                // Y: based on day (0 to 4) (This is the Z axis in 3D scene)
+                const x = item.time * CELL_SIZE;
+                const z = item.day * CELL_SIZE;
+
+                mesh.position.set(x, 2.5 / 2 + 0.1, z); // 0.1 elevation above the floor
+
+                mesh.castShadow = true;
+                mesh.receiveShadow = false;
+
+                // Attach schedule data to the mesh for raycasting lookup
+                mesh.userData = {
+                    isClassBlock: true,
+                    dayName: DAYS[item.day],
+                    timeName: TIMES[item.time],
+                    ...item,
+                    ...SUBJECT_INFO[item.code]
+                };
+
+                scene.add(mesh);
+                objects.push(mesh);
+            });
+        }
+
+        function createLabels() {
+            // Create Day Labels (along the Z-axis of the grid)
+            DAYS.forEach((dayName, index) => {
+                const z = index * CELL_SIZE;
+                const x = -CELL_SIZE * 0.7; // Position slightly outside the grid
+                const y = CELL_SIZE * 0.1;
+
+                const label = document.createElement('div');
+                label.className = 'grid-label';
+                label.textContent = dayName;
+                LABELS_CONTAINER.appendChild(label);
+
+                // We need to project the 3D position to 2D screen coordinates
+                const position = new THREE.Vector3(x, y, z);
+                project3DTo2D(position, label);
+            });
+
+            // Create Time Labels (along the X-axis of the grid)
+            TIMES.forEach((timeName, index) => {
+                const x = index * CELL_SIZE;
+                const z = -CELL_SIZE * 0.7; // Position slightly outside the grid
+                const y = CELL_SIZE * 0.1;
+
+                const label = document.createElement('div');
+                label.className = 'grid-label text-xs';
+                // Use a line break for time to fit better
+                label.innerHTML = timeName.replace(" - ", "<br/>").replace(" (Break)", "");
+                LABELS_CONTAINER.appendChild(label);
+
+                const position = new THREE.Vector3(x, y, z);
+                project3DTo2D(position, label);
+            });
+        }
+
+        // --- 4. INTERACTION AND HELPERS ---
+
+        function project3DTo2D(position, element) {
+            // Helper function to update HTML label positions based on 3D coordinates
+            const vector = position.clone();
+            vector.project(camera);
+
+            const canvasBounds = renderer.domElement.getBoundingClientRect();
+            const x = (vector.x * 0.5 + 0.5) * canvasBounds.width + canvasBounds.left;
+            const y = (-vector.y * 0.5 + 0.5) * canvasBounds.height + canvasBounds.top;
+
+            // Center the HTML element on the projected 3D point
+            element.style.top = `${y - element.offsetHeight / 2}px`;
+            element.style.left = `${x - element.offsetWidth / 2}px`;
+        }
+
+        function onWindowResize() {
+            const headerHeight = document.querySelector('header').offsetHeight;
+            const width = window.innerWidth;
+            const height = window.innerHeight - headerHeight;
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+
+            // Reposition all labels
+            const labels = LABELS_CONTAINER.querySelectorAll('.grid-label');
+            let dayIndex = 0;
+            let timeIndex = 0;
+
+            labels.forEach((label, index) => {
+                let position;
+                if (index < DAYS.length) {
+                    // Day labels
+                    const z = dayIndex++ * CELL_SIZE;
+                    const x = -CELL_SIZE * 0.7;
+                    const y = CELL_SIZE * 0.1;
+                    position = new THREE.Vector3(x, y, z);
+                } else {
+                    // Time labels
+                    const x = timeIndex++ * CELL_SIZE;
+                    const z = -CELL_SIZE * 0.7;
+                    const y = CELL_SIZE * 0.1;
+                    position = new THREE.Vector3(x, y, z);
+                }
+                project3DTo2D(position, label);
+            });
+        }
+
+        function onMouseMove(event) {
+            // Calculate mouse position in normalized device coordinates (-1 to +1)
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ( (event.clientX - rect.left) / rect.width ) * 2 - 1;
+            mouse.y = - ( (event.clientY - rect.top) / rect.height ) * 2 + 1;
+        }
+
+        function checkIntersections() {
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(objects);
+
+            if (intersects.length > 0) {
+                const intersection = intersects[0];
+                const newActiveBlock = intersection.object;
+
+                if (activeBlock !== newActiveBlock) {
+                    // Reset previous block (if any)
+                    if (activeBlock) {
+                        // activeBlock.material.color.setHex(activeBlock.userData.originalColor);
+                        activeBlock.scale.set(1, 1, 1);
+                    }
+
+                    // Set new active block
+                    activeBlock = newActiveBlock;
+                    // Store original color (optional: use highlight color instead of original)
+                    // activeBlock.userData.originalColor = activeBlock.material.color.getHex();
+                    // activeBlock.material.color.setHex(0xFF4500); // Highlight color (OrangeRed)
+                    activeBlock.scale.set(1.1, 1.1, 1.1); // Slight pop-up effect
+
+                    // Update HTML Info Box
+                    updateInfoBox(activeBlock.userData);
+                }
+            } else {
+                // No intersection
+                if (activeBlock) {
+                    // activeBlock.material.color.setHex(activeBlock.userData.originalColor);
+                    activeBlock.scale.set(1, 1, 1);
+                    activeBlock = null;
+                    hideInfoBox();
+                }
+            }
+
+            // Update mouse cursor
+            renderer.domElement.style.cursor = intersects.length > 0 ? 'pointer' : 'default';
+        }
+
+        function updateInfoBox(data) {
+            document.getElementById('class-title').textContent = data.name || 'Unknown Class';
+            document.getElementById('class-code').textContent = `${data.code} ${data.type}`;
+            document.getElementById('class-day').textContent = data.dayName;
+            document.getElementById('class-time').textContent = data.timeName;
+            document.getElementById('class-room').textContent = data.room;
+            document.getElementById('class-lecturer').textContent = data.lecturer;
+            INFO_BOX.classList.add('active');
+        }
+
+        function hideInfoBox() {
+            INFO_BOX.classList.remove('active');
+        }
+
+        // --- 5. ANIMATION LOOP ---
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Update OrbitControls
+            controls.update();
+
+            // Rotate all class blocks for a "cute" subtle animation
+            objects.forEach(mesh => {
+                mesh.rotation.y += 0.005;
+            });
+
+            // Check for mouse interactions
+            checkIntersections();
+
+            // Reposition the HTML labels
+            const labels = LABELS_CONTAINER.querySelectorAll('.grid-label');
+            let dayIndex = 0;
+            let timeIndex = 0;
+
+            labels.forEach((label, index) => {
+                let position;
+                if (index < DAYS.length) {
+                    const z = dayIndex++ * CELL_SIZE;
+                    const x = -CELL_SIZE * 0.7;
+                    const y = CELL_SIZE * 0.1;
+                    position = new THREE.Vector3(x, y, z);
+                } else {
+                    const x = timeIndex++ * CELL_SIZE;
+                    const z = -CELL_SIZE * 0.7;
+                    const y = CELL_SIZE * 0.1;
+                    position = new THREE.Vector3(x, y, z);
+                }
+                project3DTo2D(position, label);
+            });
+
+
+            renderer.render(scene, camera);
+        }
+
+        // --- 6. START APPLICATION ---
+
+        window.onload = function() {
+            init();
+            animate();
+            onWindowResize(); // Initial resize and label placement
+        };
+
+    </script>
+
+</body>
+</html>
